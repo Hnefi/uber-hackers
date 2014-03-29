@@ -66,22 +66,33 @@ public class ZkConnector implements Watcher {
         return stat;
     }
 
+    protected KeeperException.Code create (String path, byte[] byteData, CreateMode mode) {
+        try{
+            zooKeeper.create(path, byteData, acl, mode);
+        } catch(KeeperException e) {
+            return e.code();
+        } catch (Exception e) {
+            return KeeperException.Code.SYSTEMERROR;
+        }
+        return KeeperException.Code.OK;
+    }
+
     protected KeeperException.Code create(String path, String data, CreateMode mode) {
         
+        byte[] byteData = null;
         try {
-            byte[] byteData = null;
             if(data != null) {
                 byteData = data.getBytes();
             }
-            zooKeeper.create(path, byteData, acl, mode);
-            
-        } catch(KeeperException e) {
-            return e.code();
         } catch(Exception e) {
             return KeeperException.Code.SYSTEMERROR;
         }
         
-        return KeeperException.Code.OK;
+        return create(path, byteData, mode);
+    }
+
+    protected KeeperException.Code create(String path, ZkPacket packet, CreateMode mode){
+        return create(path, packet.asBytes(), mode); 
     }
 
     public void process(WatchedEvent event) {
@@ -90,5 +101,16 @@ public class ZkConnector implements Watcher {
             connectedSignal.countDown();
         }
     }
+
+    public ZkPacket getPacket(String path, boolean watch, Stat stat){
+        byte[] byteData = null;
+        try{       
+            byteData = zooKeeper.getData(path, watch, stat);
+        } catch(Exception e) {
+            System.out.println(e.getMessage());
+            return null;
+        }
+        return ZkPacket.asPacket(byteData);
+    } 
 }
 

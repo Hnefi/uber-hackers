@@ -6,6 +6,10 @@ import org.apache.zookeeper.Watcher.Event.EventType;
 
 import java.util.concurrent.CountDownLatch;
 
+import java.io.ByteArrayOutputStream;
+import java.io.ObjectOutputStream;
+import java.io.ObjectInputStream;
+
 public class B {
     
     static CountDownLatch nodeCreatedSignal = new CountDownLatch(1);
@@ -51,12 +55,17 @@ public class B {
                             
         System.out.println("Waiting for " + myPath + " to be created ...");
         
+        ZkPacket data = null;
         try{       
             nodeCreatedSignal.await();
+            data = zkc.getPacket(myPath, false, null);
         } catch(Exception e) {
             System.out.println(e.getMessage());
         }
 
+        if (data != null){
+            System.out.println("Found Packet! md5:"+data.md5+" partId:"+data.partId+" total:"+data.totalNum);
+        }
         System.out.println("DONE");
     }
 }

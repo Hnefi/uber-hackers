@@ -60,7 +60,7 @@ public class Test {
             System.out.println("Creating " + myPath);
             Code ret = zkc.create(
                         myPath,         // Path of znode
-                        null,           // Data not needed.
+                        (String)null,           // Data not needed.
                         CreateMode.EPHEMERAL   // Znode type, set to EPHEMERAL.
                         );
             if (ret == Code.OK) System.out.println("the boss!");

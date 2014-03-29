@@ -32,15 +32,13 @@ public class A {
             Thread.sleep(10000);
 
             System.out.println("Creating " + myPath);
-            zk.create(
+            ZkPacket p = new ZkPacket("hello", 5, 10);
+
+            zkc.create(
                 myPath,         // Path of znode
-                null,           // Data not needed.
-                Ids.OPEN_ACL_UNSAFE,    // ACL, set to Completely Open.
+                p,           // Test sending data
                 CreateMode.PERSISTENT   // Znode type, set to Persistent.
                 );
-
-        } catch(KeeperException e) {
-            System.out.println(e.code());
         } catch(Exception e) {
             System.out.println("Make node:" + e.getMessage());
         }
