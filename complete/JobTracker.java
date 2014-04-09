@@ -220,7 +220,7 @@ public class JobTracker {
             // make zkpacket that holds this primary ip+port to connect on
             ZkPacket primaryPack = null;
             try {
-                primaryPack = new ZkPacket(null,0,0,serverPort,InetAddress.getLocalHost());
+                primaryPack = new ZkPacket(null,0,0,serverPort,InetAddress.getLocalHost(), null);
             } catch(UnknownHostException x) {
                 System.err.println("JobTracker encountered UnknownHostException: " + x.getMessage()
                         + " when trying to getLocalHost() in becomePrimary().");
