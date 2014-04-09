@@ -64,9 +64,9 @@ class WorkerHandler implements Runnable {
             oos.writeObject(new DictionaryRequestPacket(null, null, dictionarySection));
         
             //Now that we've sent the section, close the socket and die.
-            oos.close();
-            ois.close();
-            sock.close();
+            //oos.close();
+            //ois.close();
+            //sock.close();
         } catch (IOException e) {
             System.err.println("IOException when WorkerHandler trying to send dictionary section to Worker.");
         }
@@ -146,6 +146,7 @@ public class FileServer {
         } 
     }
 
+    //Primary election code, similar to JobTracker
     private void becomePrimary() {
         Stat stat = zkc.exists(primaryPath,watcher);
         if (stat == null) {
