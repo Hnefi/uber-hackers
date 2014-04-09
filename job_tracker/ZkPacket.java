@@ -3,16 +3,22 @@ import java.io.ByteArrayInputStream;
 import java.io.ObjectOutputStream;
 import java.io.ObjectInputStream;
 import java.io.Serializable;
+import java.lang.Integer;
+import java.net.InetAddress;
 
 public class ZkPacket implements Serializable {
     public String md5;
     public int partId;
     public int totalNum;
+    public Integer jobTrackerPort;
+    public InetAddress jobTrackerIP;
 
-    public ZkPacket(String m, int i, int n){
+    public ZkPacket(String m, int i, int n,Integer q, InetAddress r){
         md5 = m;
         partId = i;
         totalNum = n;
+        jobTrackerPort = q;
+        jobTrackerIP = r;
     }
 
     public byte[] asBytes(){
