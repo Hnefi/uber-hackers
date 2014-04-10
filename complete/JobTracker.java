@@ -201,7 +201,7 @@ class RequestHandler implements Runnable
 
             String incomingMD5 = incomingRequest.md5;
             // Make a bunch of new partition watcher threads that do the rest of the work for us.
-            Stat stat = zkc.exists(workerPath,null); // no watch
+            Stat stat = zkc.exists(ZkConnector.workerPoolPath,null); // no watch
             if (stat == null) { // then only create one partition
                 ZkPacket toPartition = new ZkPacket(incomingMD5,null,1,1,null,null,null);
                 Thread partThread = new Thread(new PartitionThread(zkc,toPartition,currentID,parentTracker),"PartitionThread1");
@@ -216,7 +216,7 @@ class RequestHandler implements Runnable
                 // spawn ALL DEM THREADS
                 for (int i = 1;i<=numPartitions;i++) {
                     ZkPacket toPartition = new ZkPacket(incomingMD5,null,i,numPartitions,null,null,null);
-                    Thread iterThread = new Thread(new PartitionThread(zkc,toPartition,activeJobPath,parentTracker),"PartitionThread"+i);
+                    Thread iterThread = new Thread(new PartitionThread(zkc,toPartition,currentID,parentTracker),"PartitionThread"+i);
                     iterThread.start();
                 }
 
@@ -368,7 +368,7 @@ public class JobTracker {
     // Only called once upon becoming the primary jobTracker... traverse all active children partitions
     // and existing completed jobs.
     private void updateIDMaps() {
-        List<String> activeChildren = zkc.getChildren(activeJobPath,false);
+        List<String> activeChildren = zkc.getChildren(ZkConnector.activeJobPath,false);
 
         if (activeChildren != null) {
             for (String elem : activeChildren) {
@@ -404,7 +404,7 @@ public class JobTracker {
             }
         }
 
-        List<String> completedChildren = zkc.getChildren(completedJobPath,false);
+        List<String> completedChildren = zkc.getChildren(ZkConnector.completedJobPath,false);
 
         if(completedChildren != null) {
             for (String elem : completedChildren) {
