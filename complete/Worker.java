@@ -70,14 +70,13 @@ class Worker {
         
         while (!Thread.currentThread().isInterrupted()){
             while(curJob == null){
+                getJob();
                 try{
                     Thread.sleep(5000); //don't overload Zookeeper
                 } catch (Exception consumed) {}
-                getJob();
             }
             processJob();
         }
-
     }
 
     //private void handleEvent(WatchedEvent event){
@@ -89,10 +88,12 @@ class Worker {
         if (curPartitions != null){
             for (String partitionPath : curPartitions){
                 String jobPath = ZkConnector.activeJobPath + "/" + partitionPath; 
+                System.out.println("Trying to take for " + jobPath);
                 Stat takenStat = zkc.exists(jobPath + ZkConnector.jobTakenTag, null);
                 if (takenStat == null){
                     //Awesome! Try to create the taken tag - be quick! We're racing other workers!
-                    Code createCode = zkc.create(partitionPath + ZkConnector.jobTakenTag, (String)null, CreateMode.EPHEMERAL);
+                    //System.out.println("Saw that the /taken node didn't exist, try to create it.");
+                    Code createCode = zkc.create(jobPath + ZkConnector.jobTakenTag, (String)null, CreateMode.EPHEMERAL);
                     if (createCode == Code.OK){
                         //SWEET! WOOORRRRKKKKK!
                         ZkPacket partitionData = zkc.getPacket(jobPath, false, null);
@@ -103,8 +104,12 @@ class Worker {
                         curJob = new WorkerJob(partitionData.partId, partitionData.totalNum, partitionData.md5, jobPath);
                         break;
                     }
-                } 
+                } else {
+                    //System.out.println("It says that /taken is already created?");
+                }
             } 
+        } else {
+            System.out.println("Active job path didn't see any children??");
         }
     }
 
@@ -203,13 +208,14 @@ class Worker {
         //Create a completed node in Zookeeper and store the MD5 and result there
         ZkPacket donePacket = new ZkPacket(curJob.md5, result, curJob.partitionId, curJob.totalPartitions, null, null, null);
 
-        int i = 5;
+        int i = 0;
         while (i < 5){
-            Code ret = zkc.create(curJob.zkPath + ZkConnector.jobFinishedTag,donePacket,CreateMode.PERSISTENT); // need ephemeral so backup wakes up.
+            Code ret = zkc.create(curJob.zkPath + ZkConnector.jobFinishedTag,donePacket,CreateMode.PERSISTENT); 
             if (ret == Code.OK) {
                 System.out.println("Successfully registered job finished!");
                 break;
             }
+            System.out.println("Couldn't create /finished node for path: " + curJob.zkPath + " with int error id: "+ ret.intValue());
             ++i;
         }
         if (i == 5){

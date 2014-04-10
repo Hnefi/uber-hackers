@@ -169,12 +169,18 @@ class RequestHandler implements Runnable
     Integer currentID;
     ZkConnector zkc;
     JobTracker parentTracker;
+    ConcurrentHashMap<String,Job> activeIDMap = null;
+    ConcurrentHashMap<String,Job> completedIDMap = null;
 
-    public RequestHandler(Socket s,ZkConnector connector,Integer idx,JobTracker jt) {
+    public RequestHandler(Socket s,ZkConnector connector,Integer idx,JobTracker jt,
+                          ConcurrentHashMap<String,Job>aid,
+                          ConcurrentHashMap<String,Job>cid) {
         sock = s;
         zkc = connector;
         currentID = idx;
         parentTracker = jt;
+        activeIDMap = aid;
+        completedIDMap = cid;
     }
 
     public void run() {
@@ -222,7 +228,7 @@ class RequestHandler implements Runnable
                 // Callback to parent signalling that job successfully created.
                 parentTracker.addActiveJobToMap(incomingMD5,currentID,1);
             } else { // get number of workers currently connected, make that many partitions
-                int numPartitiongs = stat.getNumChildren();
+                int numPartitions = stat.getNumChildren();
                 if (numPartitions > 20) { numPartitions = 20; } // impose limit on # threads to make
 
                 // spawn ALL DEM THREADS
@@ -247,6 +253,29 @@ class RequestHandler implements Runnable
             }
         } else if ( incomingRequest instanceof ClientJobQueryRequest ) {
             // TODO: Handle job status requests (connect to zookeeper, check if already completed or in-flight, return).
+            Integer incomingJobID = incomingRequest.jobID;
+            Job toCompare = new Job(incomingJobID,0); // second arg doesn't matter for equality operation
+            String result = null;
+            if (completedIDMap.containsValue(toCompare)) { // lookup the result in zk
+                System.out.println("Job ID: " + incomingJobID.intValue() + " is completed, looking up result.");
+                String pathToCmp = zkc.completedJobPath + "/" + incomingJobID;
+                ZkPacket nodeData = zkc.getPacket(pathToCmp,false,null); //TODO: Confirm what stat to pass???
+                result = nodeData.password;
+            } 
+
+            TrackerResponse toClient = new TrackerResponse();
+            if (result != null) {
+                toClient.responseType = TrackerResponse.RESULT_FOUND;
+                toClient.password = result;
+            } else {
+                toClient.responseType = TrackerResponse.NO_RESULT;
+            }
+
+            try {
+                oos.writeObject(toClient);
+            } catch (IOException x) {
+                System.err.println("IOException w. error: " + x.getMessage() + " when responding to ClientDriver w. ID.");
+            }
         } else {
             System.err.println("Un-recognized ClientRequest (it is not one of the two checked-for subclasses). Dropping it.");
         }
@@ -358,7 +387,7 @@ public class JobTracker {
             }
 
             Thread t = new Thread(
-                    new RequestHandler(recvSocket,zkc,currentID,this),"RequestHandlerThread");
+                    new RequestHandler(recvSocket,zkc,currentID,this,activeIDMap,completedIDMap),"RequestHandlerThread");
             t.start();
         }
     }
