@@ -364,6 +364,7 @@ public class JobTracker {
     }
 
     public synchronized void addActiveJobToMap(String incomingMD5,Integer currentID,int numParts) {
+        System.out.println("Callback to main JTracker, with MD5: " + incomingMD5 + " job id: " + currentID + " numParts: " + numParts);
         Job toMap = new Job(currentID,numParts);
         Job sanityCheck = activeIDMap.put(incomingMD5,toMap);
 
@@ -373,10 +374,12 @@ public class JobTracker {
     }
 
     public synchronized void registerPartitionCompleted(String key,Integer jobID) {
+        System.out.println("Registering one of the partitions completed for MD5: " + key + " job ID: " + jobID);
         Job fromMap = activeIDMap.get(key);
         fromMap.remainingParts -= 1;
         if (fromMap.remainingParts == 0) {
             // remove from active map and put in completed map
+            System.out.println("Deregistering this id in the active map since all of the partitions are reg'd completed.");
             activeIDMap.remove(key);
             completedIDMap.put(key,fromMap);
         } else {
