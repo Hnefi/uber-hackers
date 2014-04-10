@@ -213,7 +213,7 @@ class RequestHandler implements Runnable
             
             Stat stat = zkc.exists(workerPath,null); // no watch
             if (stat == null) { // then only create one partition
-                ZkPacket toPartition = new ZkPacket(incomingMD5,null,1,1,null,null);
+                ZkPacket toPartition = new ZkPacket(incomingMD5,null,1,1,null,null,null);
                 Thread partThread = new Thread(new PartitionThread(zkc,toPartition,activeJobPath,completedJobPath,currentID),"PartitionThread1");
                 partThread.start();
             } else { // get number of workers currently connected, make that many partitions
@@ -222,7 +222,7 @@ class RequestHandler implements Runnable
                 
                 // spawn ALL DEM THREADS
                 for (int i = 1;i<=numPartitions;i++) {
-                    ZkPacket toPartition = new ZkPacket(incomingMD5,null,i,numPartitions,null,null);
+                    ZkPacket toPartition = new ZkPacket(incomingMD5,null,i,numPartitions,null,null,null);
                     Thread iterThread = new Thread(new PartitionThread(zkc,toPartition,activeJobPath,completedJobPath,currentID),"PartitionThread"+i);
                     iterThread.start();
                 }
@@ -346,7 +346,7 @@ public class JobTracker {
             // make zkpacket that holds this primary ip+port to connect on
             ZkPacket primaryPack = null;
             try {
-                primaryPack = new ZkPacket(null,null,0,0,serverPort,InetAddress.getLocalHost());
+                primaryPack = new ZkPacket(null,null,0,0,serverPort,InetAddress.getLocalHost(), null);
             } catch(UnknownHostException x) {
                 System.err.println("JobTracker encountered UnknownHostException: " + x.getMessage()
                         + " when trying to getLocalHost() in becomePrimary().");
