@@ -2,7 +2,6 @@ import java.nio.charset.Charset;
 import java.io.BufferedReader;
 import java.io.FileReader;
 import java.io.IOException;
-import java.util.List;
 import java.util.ArrayList;
 
 public class DictionaryDB {
@@ -12,7 +11,7 @@ public class DictionaryDB {
     //For example, calling getSection(2, 10) returns the second of ten parts of the dictionary.
 
     private final String dictFile;
-    private final List<String> dictById;
+    private final ArrayList<String> dictById;
 
     public DictionaryDB(String fileLoc){
         dictFile = fileLoc;
@@ -34,7 +33,7 @@ public class DictionaryDB {
         return dictById.get(id);
     }
 
-    public List<String> getSection(int partitionId, int totalPartitions){
+    public ArrayList<String> getSection(int partitionId, int totalPartitions){
         if (partitionId > totalPartitions || partitionId <= 0 || totalPartitions <= 0){
             return null;
         }
@@ -50,7 +49,7 @@ public class DictionaryDB {
         int lastSectionSize = numWords % totalPartitions;
         int numWordsPerPartition = (numWords - lastSectionSize) / totalPartitions;
 
-        List<String> retList = new ArrayList<String>();
+        ArrayList<String> retList = new ArrayList<String>();
 
         int endingId = (partitionId == totalPartitions)? numWords : partitionId * numWordsPerPartition;
         for (int i = (partitionId - 1)*numWordsPerPartition; i < endingId; ++i){

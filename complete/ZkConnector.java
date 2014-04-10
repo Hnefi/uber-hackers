@@ -31,6 +31,8 @@ public class ZkConnector implements Watcher {
     public static String completedJobPath = "/completedJobs";
     public static String primaryFileServerPath = "/primaryFS";
     public static String workerPoolPath = "/workerPool";
+    public static String workerIDPath = "/worker";
+
     /**
      * Connects to ZooKeeper servers specified by hosts.
      */

@@ -1,4 +1,4 @@
-import java.util.List;
+import java.util.ArrayList;
 import java.io.Serializable;
 import java.lang.Integer;
 
@@ -16,9 +16,9 @@ class DictionaryRequestPacket implements Serializable {
 
     //In the second request, the FileServer populates the packet with a list of Strings corresponding to the section of the dictionary
     //requested by the Worker.
-    public List<String> dictSection = null;
+    public ArrayList<String> dictSection = null;
    
-    public DictionaryRequestPacket (Integer p, Integer t, List<String> d){
+    public DictionaryRequestPacket (Integer p, Integer t, ArrayList<String> d){
         partId = p;
         totalParts = t;
         dictSection = d;
