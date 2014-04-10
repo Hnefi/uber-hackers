@@ -77,8 +77,6 @@ class WorkerHandler implements Runnable {
 public class FileServer {
 
     //This class instantiates a dictionary DB and handles the socket/Zookeeper communication
-    String primaryPath = "/primaryFS";
-
     ZkConnector zkc;
     Watcher watcher;
 
@@ -148,7 +146,7 @@ public class FileServer {
 
     //Primary election code, similar to JobTracker
     private void becomePrimary() {
-        Stat stat = zkc.exists(primaryPath,watcher);
+        Stat stat = zkc.exists(ZkConnector.primaryFileServerPath,watcher);
         if (stat == null) {
             System.out.println("FileServer with thread ID# " + Thread.currentThread().getId()
                     + " trying to become the primary FileServer");
@@ -161,7 +159,7 @@ public class FileServer {
                         + " when trying to getLocalHost() in becomePrimary().");
             }
 
-            Code ret = zkc.create(primaryPath,primaryPack,CreateMode.EPHEMERAL); // need ephemeral so backup wakes up.
+            Code ret = zkc.create(ZkConnector.primaryFileServerPath,primaryPack,CreateMode.EPHEMERAL); // need ephemeral so backup wakes up.
             if (ret == Code.OK) {
                 System.out.println("FileServer with thread ID# " + Thread.currentThread().getId()
                         + " is now primary FileServer!");
@@ -175,13 +173,13 @@ public class FileServer {
     private void handleEvent(WatchedEvent event) {
         String path = event.getPath();
         EventType type = event.getType();
-        if (path.equalsIgnoreCase(primaryPath)) {
+        if (path.equalsIgnoreCase(ZkConnector.primaryFileServerPath)) {
             if (type == EventType.NodeDeleted) { // old primary dies
                 System.out.println("Old primary deleted, now try to become primary!");
                 becomePrimary();
             }
             if (type == EventType.NodeCreated) {
-                System.out.println(primaryPath + "created, this msg printed from handleEvent()");
+                System.out.println(ZkConnector.primaryFileServerPath + "created, this msg printed from handleEvent()");
                 try {
                     Thread.sleep(2000);
                 } catch (Exception consumed) {}

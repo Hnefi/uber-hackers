@@ -44,14 +44,12 @@ class IDDaemonThread implements Runnable
 
     public IDDaemonThread(ConcurrentHashMap<String,Integer>activeM,
                           ConcurrentHashMap<String,Integer>completedM,
-                          ZkConnector z,
-                          String apath,
-                          String cpath) { // called from root main() method
+                          ZkConnector z) { // called from root main() method
         activeIDMap = activeM;
         completedIDMap = completedM;
         zkc = z;
-        activeJobPath = apath;
-        completedJobPath = cpath;
+        activeJobPath = ZkConnector.activeJobPath;
+        completedJobPath = ZkConnector.completedJobPath;
         
         activeWatcher = new Watcher() { // Anonymous Watcher that only touches the active jobs node.
             @Override
@@ -182,11 +180,11 @@ class PartitionThread implements Runnable
     Integer jobID;
     Watcher partitionWatcher;
 
-    public PartitionThread(ZkConnector z, ZkPacket p,String s,String cpath,Integer i) {
+    public PartitionThread(ZkConnector z, ZkPacket p,Integer i) {
         zkc = z;
         packet = p;
-        activeJobPath = s;
-        completedPath = cpath;
+        activeJobPath = ZkConnector.activeJobPath;
+        completedPath = ZkConnector.completedJobPath;
         jobID = i;
 
         thisNodePath = activeJobPath + "/" + jobID.toString() + ":" + Integer.toString(packet.partId);
@@ -280,9 +278,6 @@ class RequestHandler implements Runnable
     Socket sock = null;
     Integer currentID;
     ZkConnector zkc;
-    String activeJobPath = "/activeJobs";
-    String completedJobPath = "/completedJobs";
-    String workerPath = "/workerPool";
 
     // Maps which are used to check the ID validity.
     ConcurrentHashMap<String,Integer> activeIDMap = null;
@@ -333,19 +328,19 @@ class RequestHandler implements Runnable
             
             // Make a bunch of new partition watcher threads that do the rest of the work for us.
             
-            Stat stat = zkc.exists(workerPath,null); // no watch
+            Stat stat = zkc.exists(ZkConnector.workerPoolPath,null); // no watch
             if (stat == null) { // then only create one partition
                 ZkPacket toPartition = new ZkPacket(incomingMD5,null,1,1,null,null,null);
-                Thread partThread = new Thread(new PartitionThread(zkc,toPartition,activeJobPath,completedJobPath,currentID),"PartitionThread1");
+                Thread partThread = new Thread(new PartitionThread(zkc,toPartition,currentID),"PartitionThread1");
                 partThread.start();
             } else { // get number of workers currently connected, make that many partitions
-                int numPartitions = zkc.getNumChildren(workerPath);
+                int numPartitions = zkc.getNumChildren(ZkConnector.workerPoolPath);
                 if (numPartitions > 20) { numPartitions = 20; } // impose limit on # threads to make
                 
                 // spawn ALL DEM THREADS
                 for (int i = 1;i<=numPartitions;i++) {
                     ZkPacket toPartition = new ZkPacket(incomingMD5,null,i,numPartitions,null,null,null);
-                    Thread iterThread = new Thread(new PartitionThread(zkc,toPartition,activeJobPath,completedJobPath,currentID),"PartitionThread"+i);
+                    Thread iterThread = new Thread(new PartitionThread(zkc,toPartition,currentID),"PartitionThread"+i);
                     iterThread.start();
                 }
             }
@@ -368,9 +363,6 @@ class RequestHandler implements Runnable
 public class JobTracker {
 
     /* Root zookeeper path for who is the primary jobtracker */
-    String primaryPath = "/primaryJobTracker";
-    String activeJobPath = "/activeJobs";
-    String completedJobPath = "/completedJobs";
     ServerSocket listeningSock = null;
     ZkConnector zkc;
     Watcher watcher;
@@ -433,7 +425,7 @@ public class JobTracker {
         activeIDMap = new ConcurrentHashMap<String,Integer>();
         completedIDMap = new ConcurrentHashMap<String,Integer>();
         // Now start ID mapper daemon thread.
-        Thread idDaemonThread = new Thread(new IDDaemonThread(activeIDMap,completedIDMap,zkc,activeJobPath,completedJobPath),"IDDaemonThread");
+        Thread idDaemonThread = new Thread(new IDDaemonThread(activeIDMap,completedIDMap,zkc),"IDDaemonThread");
         idDaemonThread.start();
 
         // open up a server socket to block on for client connections
@@ -461,7 +453,7 @@ public class JobTracker {
     }
 
     private void becomePrimary() {
-        Stat stat = zkc.exists(primaryPath,watcher);
+        Stat stat = zkc.exists(ZkConnector.primaryJobTrackerPath,watcher);
         if (stat == null) {
             System.out.println("JobTracker with thread ID# " + Thread.currentThread().getId()
                     + " trying to become the primary JobTracker");
@@ -474,7 +466,7 @@ public class JobTracker {
                         + " when trying to getLocalHost() in becomePrimary().");
             }
 
-            Code ret = zkc.create(primaryPath,primaryPack,CreateMode.EPHEMERAL); // need ephemeral so backup wakes up.
+            Code ret = zkc.create(ZkConnector.primaryJobTrackerPath,primaryPack,CreateMode.EPHEMERAL); // need ephemeral so backup wakes up.
             if (ret == Code.OK) {
                 System.out.println("JobTracker with thread ID# " + Thread.currentThread().getId()
                         + " is now primary JobTracker!");
@@ -488,13 +480,13 @@ public class JobTracker {
     private void handleEvent(WatchedEvent event) {
         String path = event.getPath();
         EventType type = event.getType();
-        if (path.equalsIgnoreCase(primaryPath)) {
+        if (path.equalsIgnoreCase(ZkConnector.primaryJobTrackerPath)) {
             if (type == EventType.NodeDeleted) { // old primary dies
                 System.out.println("Old primary deleted, now try to become primary!");
                 becomePrimary();
             }
             if (type == EventType.NodeCreated) {
-                System.out.println(primaryPath + "created, this msg printed from handleEvent()");
+                System.out.println(ZkConnector.primaryJobTrackerPath + "created, this msg printed from handleEvent()");
                 try {
                     Thread.sleep(2000);
                 } catch (Exception consumed) {}
@@ -505,21 +497,21 @@ public class JobTracker {
 
     // Happens once on becoming primary. If these nodes exist, don't bother doing anything.
     private void createJobNodes() {
-        Stat stat = zkc.exists(activeJobPath,null); // no watch
+        Stat stat = zkc.exists(ZkConnector.activeJobPath,null); // no watch
         if (stat == null) {
             System.out.println("Current primary job tracker creating active job root node on startup.");
 
-            Code ret = zkc.create(activeJobPath,(byte[])null,CreateMode.PERSISTENT); 
+            Code ret = zkc.create(ZkConnector.activeJobPath,(byte[])null,CreateMode.PERSISTENT); 
             if (ret == Code.OK) {
                 System.out.println("Active job root node now exists.");
             }
         }
 
-        stat = zkc.exists(completedJobPath,null); // no watch
+        stat = zkc.exists(ZkConnector.completedJobPath,null); // no watch
         if (stat == null) {
             System.out.println("Current primary job tracker creating completed job root node on startup.");
 
-            Code ret = zkc.create(completedJobPath,(byte[])null,CreateMode.PERSISTENT); 
+            Code ret = zkc.create(ZkConnector.completedJobPath,(byte[])null,CreateMode.PERSISTENT); 
             if (ret == Code.OK) {
                 System.out.println("Completed job root node now exists.");
             }

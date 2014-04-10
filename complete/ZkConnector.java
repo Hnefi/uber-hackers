@@ -25,6 +25,12 @@ public class ZkConnector implements Watcher {
     // ACL, set to Completely Open
     protected static final List<ACL> acl = Ids.OPEN_ACL_UNSAFE;
 
+    // List of node names used in the system
+    public static String primaryJobTrackerPath = "/primaryJobTracker";
+    public static String activeJobPath = "/activeJobs";
+    public static String completedJobPath = "/completedJobs";
+    public static String primaryFileServerPath = "/primaryFS";
+    public static String workerPoolPath = "/workerPool";
     /**
      * Connects to ZooKeeper servers specified by hosts.
      */
