@@ -272,10 +272,14 @@ public class JobTracker {
     ConcurrentHashMap<String,Job> activeIDMap = null;
     ConcurrentHashMap<String,Job> completedIDMap = null;
 
-    // Random generator which assigns the "start id" that each RequestHandler will first use.
-    Random idGen = new Random();
+    int newJobID = 0;
 
-    public void main(String[] args) {
+    public static void main(String[] args) {
+        JobTracker jt = new JobTracker();
+        jt.runMe(args);
+    }
+
+    public void runMe(String[] args) {
 
         String hosts = null;
         if (args.length != 2) {
@@ -345,7 +349,7 @@ public class JobTracker {
             //      - handle duplicate id's by looking up md5->id in a concurrenthashmap, which
             //      is created and updated by a sub-daemon thread (which always runs as long as this primary
             //      machine is active).
-            Integer currentID = new Integer(idGen.nextInt());
+            Integer currentID = new Integer(newJobID);
             Job lookup = new Job(currentID,0);
             while ( activeIDMap.containsValue(lookup) || completedIDMap.containsValue(lookup) ) {
                 // this id is already in the system somewhere. Assign a new one and try again.
@@ -406,7 +410,9 @@ public class JobTracker {
                 Integer jobID = new Integer(jid);
                 Job toMap = new Job(jobID,0); // currently 0 jobs outstanding, will need to update this
 
-                ZkPacket nodeData = zkc.getPacket(elem,false,null); //TODO: Confirm what stat to pass???
+                String getPacketFrom = ZkConnector.activeJobPath + "/" + elem;
+                //System.out.println(getPacketFrom);
+                ZkPacket nodeData = zkc.getPacket(getPacketFrom,false,null); //TODO: Confirm what stat to pass???
                 String md5Key = nodeData.md5;
 
                 if (!activeIDMap.containsValue(toMap)) { // this is a new job ID, need to add it in the map
@@ -442,6 +448,7 @@ public class JobTracker {
                 }
             }
         }
+        System.out.println("Updated maps for ID's already in system.");
     }
 
     private void becomePrimary() {
