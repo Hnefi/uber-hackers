@@ -8,13 +8,15 @@ import java.net.InetAddress;
 
 public class ZkPacket implements Serializable {
     public String md5;
+    public String password;
     public int partId;
     public int totalNum;
     public Integer jobTrackerPort;
     public InetAddress jobTrackerIP;
 
-    public ZkPacket(String m, int i, int n,Integer q, InetAddress r){
+    public ZkPacket(String m, String res,int i, int n,Integer q, InetAddress r){
         md5 = m;
+        password = res;
         partId = i;
         totalNum = n;
         jobTrackerPort = q;

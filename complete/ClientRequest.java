@@ -5,12 +5,11 @@ import java.io.Serializable;
  */
 
 public class ClientRequest implements Serializable {
-
+    public final String md5 = null;
 }
 
 
 class ClientNewJobRequest extends ClientRequest {
-
 }
 
 class ClientJobQueryRequest extends ClientRequest {

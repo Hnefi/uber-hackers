@@ -31,11 +31,11 @@ import java.lang.Integer;
 class IDDaemonThread implements Runnable
 {
     ZkConnector zkc;
-    ConcurrentHashMap<Integer,String>activeIDMap = null;
-    ConcurrentHashMap<Integer,String>completedIDMap = null;
+    ConcurrentHashMap<String,Integer>activeIDMap = null;
+    ConcurrentHashMap<String,Integer>completedIDMap = null;
 
-    public IDDaemonThread(ConcurrentHashMap<Integer,String>activeM,
-                          ConcurrentHashMap<Integer,String>completedM,
+    public IDDaemonThread(ConcurrentHashMap<String,Integer>activeM,
+                          ConcurrentHashMap<String,Integer>completedM,
                           ZkConnector z) { // called from root main() method
         activeIDMap = activeM;
         completedIDMap = completedM;
@@ -47,12 +47,106 @@ class IDDaemonThread implements Runnable
     }
 }
 
-/* Dumb threads which are created upon a new job getting mapped into the ZK system. */
+/* Template threads which are created upon a new job getting mapped into the ZK system. They sleep on the particular
+ * partition they are assigned to using watches and wait for the workers to pass the results in.
+ */
 class PartitionThread implements Runnable 
 {
+    ZkConnector zkc;
+    ZkPacket packet;
+    String activeJobPath;
+    String completedPath;
+    String thisNodePath;
+    Integer jobID;
+    Watcher partitionWatcher;
+
+    public PartitionThread(ZkConnector z, ZkPacket p,String s,String cpath,Integer i) {
+        zkc = z;
+        packet = p;
+        activeJobPath = s;
+        completedPath = cpath;
+        jobID = i;
+
+        thisNodePath = activeJobPath + "/" + jobID.toString() + "P" + Integer.toString(packet.partId);
+
+        partitionWatcher = new Watcher() { // Anonymous Watcher that only touches this partition.
+            @Override
+            public void process(WatchedEvent event) {
+                handleEvent(event);
+            } 
+        };
+    }
 
     public void run() {
-        // TODO: All of this.
+        // Connect to the ZK and create a bunch of sub-partition nodes which have the partition/thread/md5 in the ZkPacket.
+        System.out.println(Thread.currentThread().getName() + " creating its persistent partition node in ZK with path: " + thisNodePath);
+
+        Code ret = zkc.create(thisNodePath,packet,CreateMode.PERSISTENT); // jobs remain until completed
+        if (ret == Code.OK) {
+            System.out.println("Partition node with md5:" + packet.md5 + " and partition#: " + packet.partId + " now created in ZK.");
+        } // TODO: Possibly check for node already exists errors??
+
+        waitForFinished(thisNodePath);
+
+        while(!Thread.currentThread().isInterrupted()) {
+            try {
+                Thread.sleep(10000); // don't overload this system with parallelism
+            } catch (InterruptedException x) { 
+                Thread.currentThread().interrupt(); // propagate to top level, thread killed.
+            }
+        }
+    }
+
+    private void waitForFinished(String partitionNodePath) {
+        // Set a watch on this node's path for any new children being made.
+        zkc.getChildren(partitionNodePath,partitionWatcher);
+    }
+
+    private void handleEvent(WatchedEvent event) {
+        // This watch was set on a getChildren() call so it should wake up when children are created or removed.
+        String wokenPath = event.getPath();
+        EventType wokenType = event.getType();
+        if (wokenPath.equalsIgnoreCase(thisNodePath)) { // watch triggered on right node.
+            if(wokenType == EventType.NodeChildrenChanged) {
+                // check immediately for finished node
+                String finishedNodePath = thisNodePath + "/finished";
+                Stat finStat = zkc.exists(finishedNodePath,null);
+                if (finStat != null) { 
+                    // this job is finished! get the result packet and create a persistent results node inside ZK
+                    ZkPacket workerResults = zkc.getPacket(finishedNodePath,false,finStat); // TODO: check if this is the wrong stat???
+
+                    if (workerResults.password != null) { // TODO: Fix this since we actually should create/update results after all partitions finish.
+                        String newCompletedJobPath = completedPath + "/" + jobID.toString();
+                        Code ret = zkc.create(newCompletedJobPath,workerResults,CreateMode.PERSISTENT);
+                        if (ret == Code.OK) {
+                            System.out.println("New finished result created for job id: " + jobID.toString());
+                        }
+                    }
+
+                    // now delete the ephemeral 'taken' node as well as the partition itself
+                    String takenPath = thisNodePath + "/taken";
+                    Code ret = zkc.delete(takenPath,-1); // -1 matches any version number
+                    if (ret != Code.OK) {
+                        System.err.println("Error code of type: " + ret.intValue() + " when deleting ephemeral 'taken' node.");
+                    }
+                    ret = zkc.delete(finishedNodePath,-1);
+                    if (ret != Code.OK) {
+                        System.err.println("Error code of type: " + ret.intValue() + " when deleting persistent 'finished' node.");
+                    }
+                    ret = zkc.delete(thisNodePath,-1);
+                    if (ret != Code.OK) {
+                        System.err.println("Error code of type: " + ret.intValue() + " when deleting persistent partition node.");
+                    }
+
+                    // this thread's work is done
+                    Thread.currentThread().interrupt();
+                    return;
+                } else {
+                    // this job is not yet finished, re-enable the watch
+                    waitForFinished(thisNodePath);
+                }
+            }
+        }
     }
 }
 
@@ -66,14 +160,15 @@ class RequestHandler implements Runnable
     ZkConnector zkc;
     String activeJobPath = "/activeJobs";
     String completedJobPath = "/completedJobs";
+    String workerPath = "/workerPool";
 
     // Maps which are used to check the ID validity.
-    ConcurrentHashMap<Integer,String> activeIDMap = null;
-    ConcurrentHashMap<Integer,String> completedIDMap = null;
+    ConcurrentHashMap<String,Integer> activeIDMap = null;
+    ConcurrentHashMap<String,Integer> completedIDMap = null;
 
     public RequestHandler(Socket s,ZkConnector connector,Integer idx,
-                          ConcurrentHashMap<Integer,String>aid,
-                          ConcurrentHashMap<Integer,String>cid) {
+                          ConcurrentHashMap<String,Integer>aid,
+                          ConcurrentHashMap<String,Integer>cid) {
         sock = s;
         zkc = connector;
         currentID = idx;
@@ -102,13 +197,39 @@ class RequestHandler implements Runnable
         }
 
         if ( incomingRequest instanceof ClientNewJobRequest ) {
-            // TODO: Handle new jobs (create threads, have them assign zk nodes, etc etc.
+            
+            String incomingMD5 = incomingRequest.md5;
+            
             // 1. First need to parse incoming request md5 and assign this job a unique id.
-            //      - handle duplicate id's by looking up id->md5 in a concurrenthashmap, which
+            //      - handle duplicate id's by looking up md5->id in a concurrenthashmap, which
             //      is created and updated by a sub-daemon thread (which always runs as long as this primary
             //      machine is active).
-             
+            while ( activeIDMap.containsValue(currentID) || completedIDMap.containsValue(currentID) ) {
+                // this id is already in the system somewhere. Assign a new one and try again.
+                currentID = new Integer(currentID.intValue()+1);
+            }
             
+            // Make a bunch of new partition watcher threads that do the rest of the work for us.
+            
+            Stat stat = zkc.exists(workerPath,null); // no watch
+            if (stat == null) { // then only create one partition
+                ZkPacket toPartition = new ZkPacket(incomingMD5,null,1,1,null,null);
+                Thread partThread = new Thread(new PartitionThread(zkc,toPartition,activeJobPath,completedJobPath,currentID),"PartitionThread1");
+                partThread.start();
+            } else { // get number of workers currently connected, make that many partitions
+                int numPartitions = zkc.getNumChildren(workerPath);
+                if (numPartitions > 20) { numPartitions = 20; } // impose limit on # threads to make
+                
+                // spawn ALL DEM THREADS
+                for (int i = 1;i<=numPartitions;i++) {
+                    ZkPacket toPartition = new ZkPacket(incomingMD5,null,i,numPartitions,null,null);
+                    Thread iterThread = new Thread(new PartitionThread(zkc,toPartition,activeJobPath,completedJobPath,currentID),"PartitionThread"+i);
+                    iterThread.start();
+                }
+            }
+
+            //TODO: Send packet back to ClientDriver with job id that was submitted.
+
         } else if ( incomingRequest instanceof ClientJobQueryRequest ) {
             // TODO: Handle job status requests (connect to zookeeper, check if already completed or in-flight, return).
         } else {
@@ -126,6 +247,8 @@ public class JobTracker {
 
     /* Root zookeeper path for who is the primary jobtracker */
     String primaryPath = "/primaryJobTracker";
+    String activeJobPath = "/activeJobs";
+    String completedJobPath = "/completedJobs";
     ServerSocket listeningSock = null;
     ZkConnector zkc;
     Watcher watcher;
@@ -134,8 +257,8 @@ public class JobTracker {
 
     // Maps for ID's that are already in the system, and ID's that are already completed. Maintained by a daemon
     // thread which is spawned as soon as this JobTracker becomes primary. 
-    ConcurrentHashMap<Integer,String> activeIDMap = null;
-    ConcurrentHashMap<Integer,String> completedIDMap = null;
+    ConcurrentHashMap<String,Integer> activeIDMap = null;
+    ConcurrentHashMap<String,Integer> completedIDMap = null;
 
     // Random generator which assigns the "start id" that each RequestHandler will first use.
     Random idGen = new Random();
@@ -181,9 +304,12 @@ public class JobTracker {
             becomePrimary(); 
         }
 
+        // Ensure that both the active and completed job path nodes exist.
+        createJobNodes();
+
         // Getting here means we are primary. Initialize hashmaps and get ready to begin accepting connections.
-        activeIDMap = new ConcurrentHashMap<Integer,String>();
-        completedIDMap = new ConcurrentHashMap<Integer,String>();
+        activeIDMap = new ConcurrentHashMap<String,Integer>();
+        completedIDMap = new ConcurrentHashMap<String,Integer>();
         // Now start ID mapper daemon thread.
         Thread idDaemonThread = new Thread(new IDDaemonThread(activeIDMap,completedIDMap,zkc),"IDDaemonThread");
         idDaemonThread.start();
@@ -220,7 +346,7 @@ public class JobTracker {
             // make zkpacket that holds this primary ip+port to connect on
             ZkPacket primaryPack = null;
             try {
-                primaryPack = new ZkPacket(null,0,0,serverPort,InetAddress.getLocalHost());
+                primaryPack = new ZkPacket(null,null,0,0,serverPort,InetAddress.getLocalHost());
             } catch(UnknownHostException x) {
                 System.err.println("JobTracker encountered UnknownHostException: " + x.getMessage()
                         + " when trying to getLocalHost() in becomePrimary().");
@@ -251,6 +377,29 @@ public class JobTracker {
                     Thread.sleep(2000);
                 } catch (Exception consumed) {}
                 becomePrimary(); // re-enable watch if spurious trigger
+            }
+        }
+    }
+
+    // Happens once on becoming primary. If these nodes exist, don't bother doing anything.
+    private void createJobNodes() {
+        Stat stat = zkc.exists(activeJobPath,null); // no watch
+        if (stat == null) {
+            System.out.println("Current primary job tracker creating active job root node on startup.");
+
+            Code ret = zkc.create(activeJobPath,(byte[])null,CreateMode.PERSISTENT); 
+            if (ret == Code.OK) {
+                System.out.println("Active job root node now exists.");
+            }
+        }
+
+        stat = zkc.exists(completedJobPath,null); // no watch
+        if (stat == null) {
+            System.out.println("Current primary job tracker creating completed job root node on startup.");
+
+            Code ret = zkc.create(completedJobPath,(byte[])null,CreateMode.PERSISTENT); 
+            if (ret == Code.OK) {
+                System.out.println("Completed job root node now exists.");
             }
         }
     }

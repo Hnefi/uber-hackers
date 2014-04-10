@@ -96,6 +96,44 @@ public class ZkConnector implements Watcher {
         return create(path, packet.asBytes(), mode); 
     }
 
+    protected List<String> getChildren(String path,boolean watch) {
+       List<String> ret = null;
+       try {
+           ret = zooKeeper.getChildren(path,watch);
+       } catch (Exception e) {
+           System.err.println("ZkConnector received exception: "
+                   + e.getMessage() + " in getChildren()");
+       }
+       return ret;
+    }
+
+    protected List<String> getChildren(String path,Watcher watcher) {
+        List<String> ret = null;
+        try {
+            ret = zooKeeper.getChildren(path,watcher);
+        } catch (Exception e) {
+            System.err.println("ZkConnector received exception: "
+                    + e.getMessage() + " in getChildren() with attempting to set watch.");
+        }
+        return ret;
+    }
+
+    public int getNumChildren(String path) {
+        List<String> listOfChildren = getChildren(path,false);
+        return listOfChildren.size();
+    }
+
+    protected KeeperException.Code delete(String path, int version) {
+        try { 
+            zooKeeper.delete(path,version);
+        } catch(KeeperException e) {
+            return e.code();
+        } catch(InterruptedException x) {
+            Thread.currentThread().interrupt(); // propagate
+        }
+        return KeeperException.Code.OK;
+    }
+
     public void process(WatchedEvent event) {
         // release lock if ZooKeeper is connected.
         if (event.getState() == KeeperState.SyncConnected) {
