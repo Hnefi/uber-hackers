@@ -20,7 +20,7 @@ import java.net.UnknownHostException;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.math.BigInteger;
-import java.util.List;
+import java.util.ArrayList;
 
 class WorkerHandler implements Runnable {
     Socket sock = null;
@@ -54,15 +54,21 @@ class WorkerHandler implements Runnable {
             System.err.println("Error in Client Request Handler attempting to get first communication from client: "
                     + e.getMessage() );
         }
-
-        List<String> dictionarySection = null;
+        
+        ArrayList<String> dictionarySection = null;
         if (incomingRequest.partId != null && incomingRequest.totalParts != null){
             dictionarySection = dict.getSection(incomingRequest.partId, incomingRequest.totalParts);  
         }
 
         try {
             oos.writeObject(new DictionaryRequestPacket(null, null, dictionarySection));
-        
+            oos.flush();
+            try { 
+                Thread.sleep(10000);
+            } catch (InterruptedException e){
+                System.out.println("Woops!");
+            }
+            
             //Now that we've sent the section, close the socket and die.
             //oos.close();
             //ois.close();
@@ -70,6 +76,7 @@ class WorkerHandler implements Runnable {
         } catch (IOException e) {
             System.err.println("IOException when WorkerHandler trying to send dictionary section to Worker.");
         }
+        
     }
 
 }
@@ -85,7 +92,12 @@ public class FileServer {
 
     ServerSocket listeningSock = null;
 
-    public void main(String[] args){
+    public static void main(String[] args){
+        FileServer fs = new FileServer();
+        fs.process(args);
+    }
+
+    public void process(String[] args){
         if (args.length != 3){
             System.out.println("Usage: FileServer <DICT> <ZKPORT> <MYPORT>");
             System.exit(-1);
@@ -190,18 +202,6 @@ public class FileServer {
 
 /*
     WORKER CODE!!
-    public static String getHash(String word) {
 
-        String hash = null;
-        try {
-            MessageDigest md5 = MessageDigest.getInstance("MD5");
-            BigInteger hashint = new BigInteger(1, md5.digest(word.getBytes()));
-            hash = hashint.toString(16);
-            while (hash.length() < 32) hash = "0" + hash;
-        } catch (NoSuchAlgorithmException nsae) {
-            // ignore
-        }
-        return hash;
-    }
 */
 }
