@@ -19,31 +19,153 @@ import java.net.UnknownHostException;
 
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.Random;
+import java.util.List;
 
 import java.lang.Integer;
+import java.lang.String;
 
 /* Thread which is responsible for updating the id->md5 maps that store the current id's and 
  * all outstanding id's. Spawned as soon as we become primary, and runs forever...
  * - note: this daemon thread does not ever change any nodes, but it keeps a watch on the active
- *   jobs node (since when we update the DATA there, we want to map that id in the current map).
- * - periodically wakes up and checks the results node for new results finished to add to maps
+ *   jobs node's children (when a new node is created, we wake up and check the partition ID of the
+ *   node just added, and add to the map if not already there).
+ * - note2: Same procedure for watching the jobs completed node. When a result is done, add that to
+ *   the map.
  */
 class IDDaemonThread implements Runnable
 {
+    String activeJobPath;
+    String completedJobPath;
     ZkConnector zkc;
     ConcurrentHashMap<String,Integer>activeIDMap = null;
     ConcurrentHashMap<String,Integer>completedIDMap = null;
+    Watcher activeWatcher;
+    Watcher completedWatcher;
 
     public IDDaemonThread(ConcurrentHashMap<String,Integer>activeM,
                           ConcurrentHashMap<String,Integer>completedM,
-                          ZkConnector z) { // called from root main() method
+                          ZkConnector z,
+                          String apath,
+                          String cpath) { // called from root main() method
         activeIDMap = activeM;
         completedIDMap = completedM;
         zkc = z;
+        activeJobPath = apath;
+        completedJobPath = cpath;
+        
+        activeWatcher = new Watcher() { // Anonymous Watcher that only touches the active jobs node.
+            @Override
+            public void process(WatchedEvent event) {
+                handleActiveNodeEvent(event);
+            } 
+        };
+        
+        completedWatcher = new Watcher() { // Anonymous Watcher that only touches the completed job node.
+            @Override
+            public void process(WatchedEvent event) {
+                handleCompletedNodeEvent(event);
+            } 
+        };
     }
 
     public void run() {
-        //TODO: All of this.
+        // just block until anything happens....
+        waitForChildEvent(activeJobPath,activeWatcher);
+        waitForChildEvent(completedJobPath,completedWatcher);
+
+        while(!Thread.currentThread().isInterrupted()) {
+            try {
+                Thread.sleep(10000); // don't overload this system with parallelism
+            } catch (InterruptedException x) { 
+                Thread.currentThread().interrupt(); // propagate to top level, thread killed.
+            }
+        }
+    }
+
+    // Create a watch on this path's CHILDREN. Will not set a watch if second arg is null
+    private void waitForChildEvent(String nodePath,Watcher watchToSet) {
+        zkc.getChildren(nodePath,watchToSet);
+    }
+
+    /* Processing function for the active jobs node */
+    private void handleActiveNodeEvent(WatchedEvent event) { 
+        String wokenPath = event.getPath();
+        EventType wokenType = event.getType();
+        if (wokenPath.equalsIgnoreCase(activeJobPath)) { // watch triggered on right node.
+            if(wokenType == EventType.NodeChildrenChanged) {
+                // get list of children and iterate through it to check for new id's not in the map
+                List<String> children = zkc.getChildren(activeJobPath,false);
+                if (children == null) { 
+                    // all partitions may be deleted..... re-enable watch
+                    waitForChildEvent(activeJobPath,activeWatcher);
+                } else {
+                    for (String elem : children) {
+                        // string process the node to get the id that was assigned
+                        String[] parts = elem.split("/");
+                        String partContainingID = null;
+                        for (String idx : parts ) {
+                            System.out.println("Current split element is: " + idx);
+                            if (idx.contains(":")) { // this is the part that has the id
+                                partContainingID = idx;
+                                break;
+                            }
+                        }
+                        String[] parts2 = partContainingID.split(":");
+                        String jid = parts2[0]; // id always is before the ':'
+                        Integer jobID = new Integer(jid);
+
+                        if (!activeIDMap.containsValue(jobID)) { // this is a new job ID, need to add it in the map
+                            // grab data from this node
+                            ZkPacket nodeData = zkc.getPacket(elem,false,null); //TODO: Confirm what stat to pass???
+                            String md5Key = nodeData.md5;
+                            Integer oldValue = activeIDMap.put(md5Key,jobID);
+                            if (oldValue != null) {
+                                System.err.println("Sanity check failed!!!!! MD5 " + md5Key + " previously mapped to jobID in ACTIVE: "
+                                        + oldValue.toString() + " even though we are currently assigning it to jobID in ACTIVE: "
+                                        + jobID.toString());
+                            }
+                        }
+                    }
+                    // re-enable watch as well
+                    waitForChildEvent(activeJobPath,activeWatcher);
+                }
+            }
+        }
+    }
+    
+    /* processing for the complete jobs node */
+    private void handleCompletedNodeEvent(WatchedEvent event) {
+        String wokenPath = event.getPath();
+        EventType wokenType = event.getType();
+        if (wokenPath.equalsIgnoreCase(completedJobPath)) { // watch triggered on right node.
+            if(wokenType == EventType.NodeChildrenChanged) {
+                // get list of children and iterate through it to check for new id's not in the map
+                List<String> children = zkc.getChildren(completedJobPath,false);
+                if (children == null) { 
+                    // all partitions may be deleted..... re-enable watch
+                    waitForChildEvent(completedJobPath,completedWatcher);
+                } else {
+                    for (String elem : children) {
+                        // node's name is the job id, no processing needed
+                        Integer jobID = new Integer(elem);
+
+                        if (!activeIDMap.containsValue(jobID)) { // this is a new job ID, need to add it in the map
+                            // grab data from this node
+                            ZkPacket nodeData = zkc.getPacket(elem,false,null); //TODO: Confirm what stat to pass???
+                            String md5Key = nodeData.md5;
+                            Integer oldValue = completedIDMap.put(md5Key,jobID);
+                            if (oldValue != null) {
+                                System.err.println("Sanity check failed!!!!! MD5 " + md5Key + " previously mapped to jobID in CMP: "
+                                        + oldValue.toString() + " even though we are currently assigning it to jobID in CMP: "
+                                        + jobID.toString());
+                            }
+                        }
+                    }
+                    // re-enable watch as well
+                    waitForChildEvent(completedJobPath,completedWatcher);
+                }
+            }
+        }
     }
 }
 
@@ -67,7 +189,7 @@ class PartitionThread implements Runnable
         completedPath = cpath;
         jobID = i;
 
-        thisNodePath = activeJobPath + "/" + jobID.toString() + "P" + Integer.toString(packet.partId);
+        thisNodePath = activeJobPath + "/" + jobID.toString() + ":" + Integer.toString(packet.partId);
 
         partitionWatcher = new Watcher() { // Anonymous Watcher that only touches this partition.
             @Override
@@ -311,7 +433,7 @@ public class JobTracker {
         activeIDMap = new ConcurrentHashMap<String,Integer>();
         completedIDMap = new ConcurrentHashMap<String,Integer>();
         // Now start ID mapper daemon thread.
-        Thread idDaemonThread = new Thread(new IDDaemonThread(activeIDMap,completedIDMap,zkc),"IDDaemonThread");
+        Thread idDaemonThread = new Thread(new IDDaemonThread(activeIDMap,completedIDMap,zkc,activeJobPath,completedJobPath),"IDDaemonThread");
         idDaemonThread.start();
 
         // open up a server socket to block on for client connections
