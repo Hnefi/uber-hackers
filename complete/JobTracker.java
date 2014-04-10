@@ -112,7 +112,7 @@ class PartitionThread implements Runnable
         if (wokenPath.equalsIgnoreCase(thisNodePath)) { // watch triggered on right node.
             if(wokenType == EventType.NodeChildrenChanged) {
                 // check immediately for finished node
-                String finishedNodePath = thisNodePath + "/finished";
+                String finishedNodePath = thisNodePath + ZkConnector.jobFinishedTag;
                 Stat finStat = zkc.exists(finishedNodePath,null);
                 if (finStat != null) { 
                     // this job is finished! get the result packet and create a persistent results node inside ZK
@@ -127,7 +127,7 @@ class PartitionThread implements Runnable
                         }
 
                         // now delete the ephemeral 'taken' node as well as the partition itself
-                        String takenPath = thisNodePath + "/taken";
+                        String takenPath = thisNodePath + ZkConnector.jobTakenTag;
                         ret = zkc.delete(takenPath,-1); // -1 matches any version number
                         if (ret != Code.OK) {
                             System.err.println("Error code of type: " + ret.intValue() + " when deleting ephemeral 'taken' node.");

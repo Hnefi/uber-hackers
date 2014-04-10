@@ -5,6 +5,7 @@ import org.apache.zookeeper.Watcher;
 import org.apache.zookeeper.ZooKeeper;
 import org.apache.zookeeper.data.Stat;
 import org.apache.zookeeper.Watcher.Event.EventType;
+import org.apache.zookeeper.CreateMode;
 
 import java.io.ObjectOutputStream;
 import java.io.ObjectInputStream;
@@ -18,23 +19,26 @@ import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.math.BigInteger;
 import java.util.ArrayList;
+import java.util.List;
 
 class WorkerJob {
     public String md5 = null;
     public Integer partitionId = null;
     public Integer totalPartitions = null;
+    public String zkPath = null;
     
-    public WorkerJob (Integer p, Integer t, String m){
+    public WorkerJob (Integer p, Integer t, String m, String z){
         partitionId = p;
         totalPartitions = t;
         md5 = m;
+        zkPath = z;
     }
 }
 
 class Worker {
 
     ZkConnector zkc;
-    Watcher watcher;
+    //Watcher newJobsWatcher;
 
     int myPort;
     
@@ -64,18 +68,10 @@ class Worker {
         }
         System.out.println("Connected to Zookeeper!");
         
-        watcher = new Watcher() {
-            @Override
-            public void process(WatchedEvent event){
-                handleEvent(event);   
-            }
-        };
-
         while (!Thread.currentThread().isInterrupted()){
-            //Wait until you are the primary FileServer
             while(curJob == null){
                 try{
-                    //Thread.sleep(5000); //don't overload Zookeeper
+                    Thread.sleep(5000); //don't overload Zookeeper
                 } catch (Exception consumed) {}
                 getJob();
             }
@@ -84,12 +80,32 @@ class Worker {
 
     }
 
-    private void handleEvent(WatchedEvent event){
+    //private void handleEvent(WatchedEvent event){
 
-    }
+    //}
 
     private void getJob() {
-        curJob = new WorkerJob(1, 1, "dd81e2cc883fc988c91bd399f87dcb07");
+        List<String> curPartitions = zkc.getChildren(ZkConnector.activeJobPath, false);
+        if (curPartitions != null){
+            for (String partitionPath : curPartitions){
+                String jobPath = ZkConnector.activeJobPath + "/" + partitionPath; 
+                Stat takenStat = zkc.exists(jobPath + ZkConnector.jobTakenTag, null);
+                if (takenStat == null){
+                    //Awesome! Try to create the taken tag - be quick! We're racing other workers!
+                    Code createCode = zkc.create(partitionPath + ZkConnector.jobTakenTag, (String)null, CreateMode.EPHEMERAL);
+                    if (createCode == Code.OK){
+                        //SWEET! WOOORRRRKKKKK!
+                        ZkPacket partitionData = zkc.getPacket(jobPath, false, null);
+                        if (partitionData == null){
+                            System.out.println("Found a null Packet in a job! AHHHHHHHHH!");
+                            System.exit(-1);
+                        }
+                        curJob = new WorkerJob(partitionData.partId, partitionData.totalNum, partitionData.md5, jobPath);
+                        break;
+                    }
+                } 
+            } 
+        }
     }
 
     private ArrayList<String> getDictionarySection(Integer pid, Integer numParts){
@@ -163,12 +179,13 @@ class Worker {
             System.exit(-1);
         }
 
+        System.out.println("Processing job "+curJob.zkPath+":: "+curJob.partitionId+"/"+curJob.totalPartitions+" for md5: "+curJob.md5);
+
         //Get the list of words from the file server
         String jobMD5 = curJob.md5;
         String result = null;
         ArrayList<String> dictionarySection = getDictionarySection(curJob.partitionId, curJob.totalPartitions);
 
-        System.out.println("Searching through "+dictionarySection.size()+" words...");
         //Do the work of hashing and finding a match
         for(String dictWord : dictionarySection){
             String md5 = getHash(dictWord);
@@ -184,10 +201,23 @@ class Worker {
             System.out.println("Could not find your password in the section!");
         } 
         //Create a completed node in Zookeeper and store the MD5 and result there
+        ZkPacket donePacket = new ZkPacket(curJob.md5, result, curJob.partitionId, curJob.totalPartitions, null, null, null);
 
+        int i = 5;
+        while (i < 5){
+            Code ret = zkc.create(curJob.zkPath + ZkConnector.jobFinishedTag,donePacket,CreateMode.PERSISTENT); // need ephemeral so backup wakes up.
+            if (ret == Code.OK) {
+                System.out.println("Successfully registered job finished!");
+                break;
+            }
+            ++i;
+        }
+        if (i == 5){
+            System.err.println("Cannot register taken job as finished!! Something must be horribly wrong. ... Bye!");
+            System.exit(-1);
+        }
         //Clear the curJob
         curJob = null; 
-        System.exit(-1);
     }
 
     public static String getHash(String word) {
