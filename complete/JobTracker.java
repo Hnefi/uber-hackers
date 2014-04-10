@@ -222,7 +222,7 @@ class RequestHandler implements Runnable
                 // Callback to parent signalling that job successfully created.
                 parentTracker.addActiveJobToMap(incomingMD5,currentID,1);
             } else { // get number of workers currently connected, make that many partitions
-                int numPartitions = zkc.getNumChildren(ZkConnector.workerPoolPath);
+                int numPartitiongs = stat.getNumChildren();
                 if (numPartitions > 20) { numPartitions = 20; } // impose limit on # threads to make
 
                 // spawn ALL DEM THREADS
