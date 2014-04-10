@@ -6,6 +6,7 @@ import java.io.Serializable;
 
 public class ClientRequest implements Serializable {
     public String md5 = null;
+    public Integer jobID = null;
 }
 
 

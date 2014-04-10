@@ -199,7 +199,19 @@ class RequestHandler implements Runnable
 
         if ( incomingRequest instanceof ClientNewJobRequest ) {
 
+            if (parentTracker.activeMapContains(incomingRequest.md5)) { // this md5 is already mapped
+                TrackerResponse toClient = new TrackerResponse();
+                toClient.responseType = TrackerResponse.DUPLICATE_MD5;
+                try {
+                    oos.writeObject(toClient);
+                } catch (IOException x) {
+                    System.err.println("IOException w. error: " + x.getMessage() + " when responding to ClientDriver w. ID.");
+                }
+                return;
+            }
+
             String incomingMD5 = incomingRequest.md5;
+
             // Make a bunch of new partition watcher threads that do the rest of the work for us.
             Stat stat = zkc.exists(ZkConnector.workerPoolPath,null); // no watch
             if (stat == null) { // then only create one partition
@@ -334,9 +346,11 @@ public class JobTracker {
             //      is created and updated by a sub-daemon thread (which always runs as long as this primary
             //      machine is active).
             Integer currentID = new Integer(idGen.nextInt());
-            while ( activeIDMap.containsValue(currentID) || completedIDMap.containsValue(currentID) ) {
+            Job lookup = new Job(currentID,0);
+            while ( activeIDMap.containsValue(lookup) || completedIDMap.containsValue(lookup) ) {
                 // this id is already in the system somewhere. Assign a new one and try again.
                 currentID = new Integer(currentID.intValue()+1);
+                lookup.jobID = currentID;
             }
 
             Thread t = new Thread(
@@ -348,6 +362,7 @@ public class JobTracker {
     public synchronized void addActiveJobToMap(String incomingMD5,Integer currentID,int numParts) {
         Job toMap = new Job(currentID,numParts);
         Job sanityCheck = activeIDMap.put(incomingMD5,toMap);
+
         if (sanityCheck != null) {
             System.out.println("Sanity check failed in addActiveJobToMap()! This md5 was already mapped to a job id.");
         }
@@ -363,6 +378,10 @@ public class JobTracker {
         } else {
             activeIDMap.put(key,fromMap);
         }
+    }
+
+    public boolean activeMapContains(String key) {
+        return activeIDMap.containsKey(key);
     }
 
     // Only called once upon becoming the primary jobTracker... traverse all active children partitions
