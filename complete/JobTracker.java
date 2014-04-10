@@ -199,7 +199,19 @@ class RequestHandler implements Runnable
 
         if ( incomingRequest instanceof ClientNewJobRequest ) {
 
+            if (parentTracker.activeMapContains(incomingRequest.md5)) { // this md5 is already mapped
+                TrackerResponse toClient = new TrackerResponse();
+                toClient.responseType = TrackerResponse.DUPLICATE_MD5;
+                try {
+                    oos.writeObject(toClient);
+                } catch (IOException x) {
+                    System.err.println("IOException w. error: " + x.getMessage() + " when responding to ClientDriver w. ID.");
+                }
+                return;
+            }
+
             String incomingMD5 = incomingRequest.md5;
+
             // Make a bunch of new partition watcher threads that do the rest of the work for us.
             Stat stat = zkc.exists(ZkConnector.workerPoolPath,null); // no watch
             if (stat == null) { // then only create one partition
@@ -260,10 +272,14 @@ public class JobTracker {
     ConcurrentHashMap<String,Job> activeIDMap = null;
     ConcurrentHashMap<String,Job> completedIDMap = null;
 
-    // Random generator which assigns the "start id" that each RequestHandler will first use.
-    Random idGen = new Random();
+    int newJobID = 0;
 
-    public void main(String[] args) {
+    public static void main(String[] args) {
+        JobTracker jt = new JobTracker();
+        jt.runMe(args);
+    }
+
+    public void runMe(String[] args) {
 
         String hosts = null;
         if (args.length != 2) {
@@ -333,10 +349,12 @@ public class JobTracker {
             //      - handle duplicate id's by looking up md5->id in a concurrenthashmap, which
             //      is created and updated by a sub-daemon thread (which always runs as long as this primary
             //      machine is active).
-            Integer currentID = new Integer(idGen.nextInt());
-            while ( activeIDMap.containsValue(currentID) || completedIDMap.containsValue(currentID) ) {
+            Integer currentID = new Integer(newJobID);
+            Job lookup = new Job(currentID,0);
+            while ( activeIDMap.containsValue(lookup) || completedIDMap.containsValue(lookup) ) {
                 // this id is already in the system somewhere. Assign a new one and try again.
                 currentID = new Integer(currentID.intValue()+1);
+                lookup.jobID = currentID;
             }
 
             Thread t = new Thread(
@@ -346,23 +364,31 @@ public class JobTracker {
     }
 
     public synchronized void addActiveJobToMap(String incomingMD5,Integer currentID,int numParts) {
+        System.out.println("Callback to main JTracker, with MD5: " + incomingMD5 + " job id: " + currentID + " numParts: " + numParts);
         Job toMap = new Job(currentID,numParts);
         Job sanityCheck = activeIDMap.put(incomingMD5,toMap);
+
         if (sanityCheck != null) {
             System.out.println("Sanity check failed in addActiveJobToMap()! This md5 was already mapped to a job id.");
         }
     }
 
     public synchronized void registerPartitionCompleted(String key,Integer jobID) {
+        System.out.println("Registering one of the partitions completed for MD5: " + key + " job ID: " + jobID);
         Job fromMap = activeIDMap.get(key);
         fromMap.remainingParts -= 1;
         if (fromMap.remainingParts == 0) {
             // remove from active map and put in completed map
+            System.out.println("Deregistering this id in the active map since all of the partitions are reg'd completed.");
             activeIDMap.remove(key);
             completedIDMap.put(key,fromMap);
         } else {
             activeIDMap.put(key,fromMap);
         }
+    }
+
+    public boolean activeMapContains(String key) {
+        return activeIDMap.containsKey(key);
     }
 
     // Only called once upon becoming the primary jobTracker... traverse all active children partitions
@@ -387,7 +413,9 @@ public class JobTracker {
                 Integer jobID = new Integer(jid);
                 Job toMap = new Job(jobID,0); // currently 0 jobs outstanding, will need to update this
 
-                ZkPacket nodeData = zkc.getPacket(elem,false,null); //TODO: Confirm what stat to pass???
+                String getPacketFrom = ZkConnector.activeJobPath + "/" + elem;
+                //System.out.println(getPacketFrom);
+                ZkPacket nodeData = zkc.getPacket(getPacketFrom,false,null); //TODO: Confirm what stat to pass???
                 String md5Key = nodeData.md5;
 
                 if (!activeIDMap.containsValue(toMap)) { // this is a new job ID, need to add it in the map
@@ -423,6 +451,7 @@ public class JobTracker {
                 }
             }
         }
+        System.out.println("Updated maps for ID's already in system.");
     }
 
     private void becomePrimary() {
