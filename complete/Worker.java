@@ -68,6 +68,11 @@ class Worker {
         }
         System.out.println("Connected to Zookeeper!");
 
+        Stat poolState = zkc.exists(ZkConnector.workerPoolPath, null);
+        if (poolState == null){
+            zkc.create(ZkConnector.workerPoolPath, (String)null, CreateMode.PERSISTENT); //don't worry about watching it, as long as it gets created!
+        }
+
         Code createCode = zkc.create(ZkConnector.workerPoolPath + ZkConnector.workerIDPath, (String)null, CreateMode.EPHEMERAL_SEQUENTIAL);
         if (createCode != Code.OK){
             System.err.println("ERROR: Could not create node "+ZkConnector.workerPoolPath + ZkConnector.workerIDPath);
@@ -115,8 +120,6 @@ class Worker {
                     //System.out.println("It says that /taken is already created?");
                 }
             } 
-        } else {
-            System.out.println("Active job path didn't see any children??");
         }
     }
 
