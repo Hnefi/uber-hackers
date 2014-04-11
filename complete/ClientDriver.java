@@ -113,7 +113,16 @@ public class ClientDriver {
                 System.out.println("IOException w. message: " + x.getMessage() + " when waiting for TrackerResponse after job request. A job ID was not returned for job request with md5: " + md5);
                 setupJobTracker();
             }
-            System.out.println("Your job id is: " + tr.jobID.intValue() + " for md5: " + md5);
+            // Add what type of packet I got back....
+            if (tr.responseType == TrackerResponse.JOB_ID) {
+                System.out.println("Your job id is: " + tr.jobID.intValue() + " for md5: " + md5);
+            } else if (tr.responseType == TrackerResponse.RESULT_FOUND) {
+                if (tr.password == null) {
+                    System.out.println("No password found...");
+                } else {
+                    System.out.println("We have hacked it, the password IS: " + tr.password);
+                }
+            }
             closeSocket();
         } else {
             System.out.println("No jobTracker connected..... Your job was not submitted.");

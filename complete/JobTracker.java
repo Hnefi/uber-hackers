@@ -198,9 +198,27 @@ class RequestHandler implements Runnable
 
         if ( incomingRequest instanceof ClientNewJobRequest ) {
 
-            if (parentTracker.activeMapContains(incomingRequest.md5)) { // this md5 is already mapped
+            if (activeIDMap.containsKey(incomingRequest.md5)) { // this md5 is already mapped
                 TrackerResponse toClient = new TrackerResponse();
                 toClient.responseType = TrackerResponse.DUPLICATE_MD5;
+                try {
+                    oos.writeObject(toClient);
+                } catch (IOException x) {
+                    System.err.println("IOException w. error: " + x.getMessage() + " when responding to ClientDriver w. ID.");
+                }
+                return;
+            } else if (completedIDMap.containsKey(incomingRequest.md5)) { // this md5 already computed
+                // Go to the completed node and look up.
+                Job fromCompletedMap = completedIDMap.get(incomingRequest.md5);
+                Integer jobID = fromCompletedMap.jobID;
+
+                String pathToCmp = zkc.completedJobPath + "/" + jobID;
+                ZkPacket nodeData = zkc.getPacket(pathToCmp,false,null); //TODO: Confirm what stat to pass???
+
+                TrackerResponse toClient = new TrackerResponse();
+                toClient.responseType = TrackerResponse.RESULT_FOUND;
+                toClient.password = nodeData.password;
+
                 try {
                     oos.writeObject(toClient);
                 } catch (IOException x) {
@@ -210,7 +228,6 @@ class RequestHandler implements Runnable
             }
 
             String incomingMD5 = incomingRequest.md5;
-
             // Make a bunch of new partition watcher threads that do the rest of the work for us.
             Stat stat = zkc.exists(ZkConnector.workerPoolPath,null); // no watch
             if (stat == null) { // then only create one partition
