@@ -67,7 +67,13 @@ class Worker {
             System.out.println("Zookeeper connect "+e.getMessage());
         }
         System.out.println("Connected to Zookeeper!");
-        
+
+        Code createCode = zkc.create(ZkConnector.workerPoolPath + ZkConnector.workerIDPath, (String)null, CreateMode.EPHEMERAL_SEQUENTIAL);
+        if (createCode != Code.OK){
+            System.err.println("ERROR: Could not create node "+ZkConnector.workerPoolPath + ZkConnector.workerIDPath);
+            System.exit(-1);
+        }
+ 
         while (!Thread.currentThread().isInterrupted()){
             while(curJob == null){
                 getJob();
@@ -90,7 +96,8 @@ class Worker {
                 String jobPath = ZkConnector.activeJobPath + "/" + partitionPath; 
                 //System.out.println("Trying to take for " + jobPath);
                 Stat takenStat = zkc.exists(jobPath + ZkConnector.jobTakenTag, null);
-                if (takenStat == null){
+                Stat finishedStat = zkc.exists(jobPath + ZkConnector.jobFinishedTag, null);
+                if (takenStat == null && finishedStat == null){
                     //Awesome! Try to create the taken tag - be quick! We're racing other workers!
                     //System.out.println("Saw that the /taken node didn't exist, try to create it.");
                     Code createCode = zkc.create(jobPath + ZkConnector.jobTakenTag, (String)null, CreateMode.EPHEMERAL);
@@ -208,19 +215,20 @@ class Worker {
         //Create a completed node in Zookeeper and store the MD5 and result there
         ZkPacket donePacket = new ZkPacket(curJob.md5, result, curJob.partitionId, curJob.totalPartitions, null, null, null);
 
-        int i = 0;
-        while (i < 5){
-            Code ret = zkc.create(curJob.zkPath + ZkConnector.jobFinishedTag,donePacket,CreateMode.PERSISTENT); 
-            if (ret == Code.OK) {
-                System.out.println("Successfully registered job finished!");
-                break;
-            }
+        Code ret = zkc.create(curJob.zkPath + ZkConnector.jobFinishedTag,donePacket,CreateMode.PERSISTENT); 
+        if (ret == Code.OK) {
+            System.out.println("Successfully registered job finished!");
+        } else {
             System.out.println("Couldn't create /finished node for path: " + curJob.zkPath + " with int error id: "+ ret.intValue());
-            ++i;
-        }
-        if (i == 5){
-            System.err.println("Cannot register taken job as finished!! Something must be horribly wrong. ... Bye!");
-            System.exit(-1);
+            Stat finishedStat = zkc.exists(curJob.zkPath + ZkConnector.jobFinishedTag, null);
+            if (finishedStat == null){
+                //delete the taken node, let someone else take a crack at it
+                                
+                ret = zkc.delete(curJob.zkPath + ZkConnector.jobTakenTag,-1); // -1 matches any version number
+                if (ret != Code.OK) {
+                    System.err.println("Error code of type: " + ret.intValue() + " when deleting ephemeral 'taken' node.");
+                }
+            }
         }
         //Clear the curJob
         curJob = null; 
