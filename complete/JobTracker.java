@@ -58,6 +58,7 @@ class PartitionThread implements Runnable
     String activeJobPath;
     String completedPath;
     String thisNodePath;
+    String finishedNodePath;
     Integer jobID;
     Watcher partitionWatcher;
     JobTracker parentTracker;
@@ -71,6 +72,7 @@ class PartitionThread implements Runnable
         parentTracker = jt;
 
         thisNodePath = activeJobPath + "/" + jobID.toString() + ":" + Integer.toString(packet.partId);
+        finishedNodePath = thisNodePath + ZkConnector.jobFinishedTag;
 
         partitionWatcher = new Watcher() { // Anonymous Watcher that only touches this partition.
             @Override
@@ -87,9 +89,9 @@ class PartitionThread implements Runnable
         Code ret = zkc.create(thisNodePath,packet,CreateMode.PERSISTENT); // jobs remain until completed
         if (ret == Code.OK) {
             System.out.println("Partition node with md5:" + packet.md5 + " and partition#: " + packet.partId + " now created in ZK.");
-        } // TODO: Possibly check for node already exists errors??
+        } 
 
-        waitForFinished(thisNodePath);
+        checkForFinished(); // useful when recovering from previously killed jtracker.
 
         while(!Thread.currentThread().isInterrupted()) {
             try {
@@ -100,61 +102,52 @@ class PartitionThread implements Runnable
         }
     }
 
-    private void waitForFinished(String partitionNodePath) {
-        // Set a watch on this node's path for any new children being made.
-        zkc.getChildren(partitionNodePath,partitionWatcher);
+    private void checkForFinished() {
+        Stat stat = zkc.exists(finishedNodePath,partitionWatcher);
+        if (stat != null) {
+            finishedNodeExists();
+        }
+    }
+
+    private void finishedNodeExists() {
+        System.out.println("Detected that the finished node exists.");
+        // this job is finished! get the result packet and create a persistent results node inside ZK
+        ZkPacket workerResults = zkc.getPacket(finishedNodePath,false,null); // TODO: check if this is the wrong stat???
+        String md5Key = workerResults.md5;
+
+        System.out.println("The password was successfully found as: " + workerResults.password);
+
+        // now delete the ephemeral 'taken' node as well as the partition itself
+        String takenPath = thisNodePath + ZkConnector.jobTakenTag;
+        Code ret = zkc.delete(takenPath,-1); // -1 matches any version number
+        if (ret != Code.OK) {
+            System.err.println("Error code of type: " + ret.intValue() + " when deleting ephemeral 'taken' node.");
+        }
+        ret = zkc.delete(finishedNodePath,-1);
+        if (ret != Code.OK) {
+            System.err.println("Error code of type: " + ret.intValue() + " when deleting persistent 'finished' node.");
+        }
+        ret = zkc.delete(thisNodePath,-1);
+        if (ret != Code.OK) {
+            System.err.println("Error code of type: " + ret.intValue() + " when deleting persistent partition node.");
+        }
+
+        // this thread's work is done
+        parentTracker.registerPartitionCompleted(md5Key,jobID,workerResults);
+        Thread.currentThread().interrupt();
     }
 
     private void handleEvent(WatchedEvent event) {
         // This watch was set on a getChildren() call so it should wake up when children are created or removed.
+        System.out.println("Partition thread with name: " + Thread.currentThread().getName() + " woke up on handleEvent().");
         String wokenPath = event.getPath();
         EventType wokenType = event.getType();
-        if (wokenPath.equalsIgnoreCase(thisNodePath)) { // watch triggered on right node.
-            if(wokenType == EventType.NodeChildrenChanged) {
-                // check immediately for finished node
-                String finishedNodePath = thisNodePath + ZkConnector.jobFinishedTag;
-                Stat finStat = zkc.exists(finishedNodePath,null);
-                if (finStat != null) { 
-                    // this job is finished! get the result packet and create a persistent results node inside ZK
-                    ZkPacket workerResults = zkc.getPacket(finishedNodePath,false,null); // TODO: check if this is the wrong stat???
-                    String md5Key = workerResults.md5;
-
-                    if (workerResults.password != null) { 
-                        String newCompletedJobPath = completedPath + "/" + jobID.toString();
-                        Code ret = zkc.create(newCompletedJobPath,workerResults,CreateMode.PERSISTENT);
-                        if (ret == Code.OK) {
-                            System.out.println("New finished result created for job id: " + jobID.toString());
-                        }
-
-                        // now delete the ephemeral 'taken' node as well as the partition itself
-                        String takenPath = thisNodePath + ZkConnector.jobTakenTag;
-                        ret = zkc.delete(takenPath,-1); // -1 matches any version number
-                        if (ret != Code.OK) {
-                            System.err.println("Error code of type: " + ret.intValue() + " when deleting ephemeral 'taken' node.");
-                        }
-                        ret = zkc.delete(finishedNodePath,-1);
-                        if (ret != Code.OK) {
-                            System.err.println("Error code of type: " + ret.intValue() + " when deleting persistent 'finished' node.");
-                        }
-                        ret = zkc.delete(thisNodePath,-1);
-                        if (ret != Code.OK) {
-                            System.err.println("Error code of type: " + ret.intValue() + " when deleting persistent partition node.");
-                        }
-
-                        // this thread's work is done
-                        parentTracker.registerPartitionCompleted(md5Key,jobID);
-                        Thread.currentThread().interrupt();
-                        return;
-                    }
-
-                    // Call back to the jobTracker and register that one of the partitions for this md5 was completed, but no result
-                    // created/required.
-                    parentTracker.registerPartitionCompleted(md5Key,jobID);
-
-                } else {
-                    // this job is not yet finished, re-enable the watch
-                    waitForFinished(thisNodePath);
-                }
+        if (wokenPath.equalsIgnoreCase(finishedNodePath)) { // watch triggered on right node.
+            if(wokenType == EventType.NodeCreated) {
+                System.out.println("Watcher detected finished node is completed.");
+                finishedNodeExists();
+            } else {
+                checkForFinished();
             }
         }
     }
@@ -173,8 +166,8 @@ class RequestHandler implements Runnable
     ConcurrentHashMap<String,Job> completedIDMap = null;
 
     public RequestHandler(Socket s,ZkConnector connector,Integer idx,JobTracker jt,
-                          ConcurrentHashMap<String,Job>aid,
-                          ConcurrentHashMap<String,Job>cid) {
+            ConcurrentHashMap<String,Job>aid,
+            ConcurrentHashMap<String,Job>cid) {
         sock = s;
         zkc = connector;
         currentID = idx;
@@ -221,25 +214,27 @@ class RequestHandler implements Runnable
             // Make a bunch of new partition watcher threads that do the rest of the work for us.
             Stat stat = zkc.exists(ZkConnector.workerPoolPath,null); // no watch
             if (stat == null) { // then only create one partition
+                // Callback to parent signalling that job successfully created.
+                parentTracker.addActiveJobToMap(incomingMD5,currentID,1);
+
                 ZkPacket toPartition = new ZkPacket(incomingMD5,null,1,1,null,null,null);
                 Thread partThread = new Thread(new PartitionThread(zkc,toPartition,currentID,parentTracker),"PartitionThread1");
                 partThread.start();
 
-                // Callback to parent signalling that job successfully created.
-                parentTracker.addActiveJobToMap(incomingMD5,currentID,1);
             } else { // get number of workers currently connected, make that many partitions
                 int numPartitions = stat.getNumChildren();
                 if (numPartitions > 20) { numPartitions = 20; } // impose limit on # threads to make
 
+                // Callback to parent signalling that job successfully created.
+                parentTracker.addActiveJobToMap(incomingMD5,currentID,numPartitions);
                 // spawn ALL DEM THREADS
+
                 for (int i = 1;i<=numPartitions;i++) {
                     ZkPacket toPartition = new ZkPacket(incomingMD5,null,i,numPartitions,null,null,null);
                     Thread iterThread = new Thread(new PartitionThread(zkc,toPartition,currentID,parentTracker),"PartitionThread"+i);
                     iterThread.start();
                 }
 
-                // Callback to parent signalling that job successfully created.
-                parentTracker.addActiveJobToMap(incomingMD5,currentID,numPartitions);
             }
 
             TrackerResponse toClient = new TrackerResponse();
@@ -252,23 +247,30 @@ class RequestHandler implements Runnable
                 System.err.println("IOException w. error: " + x.getMessage() + " when responding to ClientDriver w. ID.");
             }
         } else if ( incomingRequest instanceof ClientJobQueryRequest ) {
-            // TODO: Handle job status requests (connect to zookeeper, check if already completed or in-flight, return).
+            // TODO: Handle different case of invalid job or no result.
             Integer incomingJobID = incomingRequest.jobID;
             Job toCompare = new Job(incomingJobID,0); // second arg doesn't matter for equality operation
+            boolean validId = false;
             String result = null;
             if (completedIDMap.containsValue(toCompare)) { // lookup the result in zk
                 System.out.println("Job ID: " + incomingJobID.intValue() + " is completed, looking up result.");
                 String pathToCmp = zkc.completedJobPath + "/" + incomingJobID;
                 ZkPacket nodeData = zkc.getPacket(pathToCmp,false,null); //TODO: Confirm what stat to pass???
                 result = nodeData.password;
-            } 
+                validId = true;
+            } else if (activeIDMap.containsValue(toCompare)) {
+                validId = true;
+            }
 
             TrackerResponse toClient = new TrackerResponse();
             if (result != null) {
                 toClient.responseType = TrackerResponse.RESULT_FOUND;
                 toClient.password = result;
             } else {
-                toClient.responseType = TrackerResponse.NO_RESULT;
+                if (validId)
+                    toClient.responseType = TrackerResponse.NO_RESULT;
+                else
+                    toClient.responseType = TrackerResponse.INVALID_ID;
             }
 
             try {
@@ -402,7 +404,7 @@ public class JobTracker {
         }
     }
 
-    public synchronized void registerPartitionCompleted(String key,Integer jobID) {
+    public synchronized void registerPartitionCompleted(String key,Integer jobID,ZkPacket toCmpNode) {
         System.out.println("Registering one of the partitions completed for MD5: " + key + " job ID: " + jobID);
         Job fromMap = activeIDMap.get(key);
         fromMap.remainingParts -= 1;
@@ -411,6 +413,11 @@ public class JobTracker {
             System.out.println("Deregistering this id in the active map since all of the partitions are reg'd completed.");
             activeIDMap.remove(key);
             completedIDMap.put(key,fromMap);
+            String newCompletedJobPath = ZkConnector.completedJobPath + "/" + jobID.toString();
+            Code ret = zkc.create(newCompletedJobPath,toCmpNode,CreateMode.PERSISTENT);
+            if (ret == Code.OK) {
+                System.out.println("New finished result created for job id: " + jobID.toString());
+            }
         } else {
             activeIDMap.put(key,fromMap);
         }
@@ -440,24 +447,26 @@ public class JobTracker {
                 String[] parts2 = partContainingID.split(":");
                 String jid = parts2[0]; // id always is before the ':'
                 Integer jobID = new Integer(jid);
-                Job toMap = new Job(jobID,0); // currently 0 jobs outstanding, will need to update this
+                Job toMap = new Job(jobID,1); // currently 1 jobs outstanding, will need to update this
 
                 String getPacketFrom = ZkConnector.activeJobPath + "/" + elem;
                 //System.out.println(getPacketFrom);
-                ZkPacket nodeData = zkc.getPacket(getPacketFrom,false,null); //TODO: Confirm what stat to pass???
+                ZkPacket nodeData = zkc.getPacket(getPacketFrom,false,null); 
                 String md5Key = nodeData.md5;
 
-                if (!activeIDMap.containsValue(toMap)) { // this is a new job ID, need to add it in the map
-                    // grab data from this node
+                if (!activeIDMap.containsValue(toMap) ) { // this is a new job ID, need to add it in the map
                     Job oldValue = activeIDMap.put(md5Key,toMap);
                     if (oldValue != null) {
                         System.err.println("Sanity check failed!!!!! MD5 " + md5Key + " previously mapped to jobID in ACTIVE!");
                     }
-                } else { // this job is already here, we now need to increment the number of outstanding partitions
+                } else { // increment number of outstanding partitions since it's not a new node
                     Job fromMap = activeIDMap.get(md5Key);
                     Job newJobToMap = new Job(fromMap.jobID,fromMap.remainingParts++);  
                     activeIDMap.put(md5Key,newJobToMap);
                 }
+                /* Need to create a new PartitionThread for this node regardless.*/
+                Thread partThread = new Thread(new PartitionThread(zkc,nodeData,jobID,this),"PartitionThread1");
+                partThread.start();
             }
         }
 
@@ -471,7 +480,8 @@ public class JobTracker {
 
                 if (!completedIDMap.containsValue(toMap)) { // this is a new job ID, need to add it in the map
                     // grab data from this node
-                    ZkPacket nodeData = zkc.getPacket(elem,false,null); //TODO: Confirm what stat to pass???
+                    String getPacketFrom = ZkConnector.completedJobPath + "/" + elem;
+                    ZkPacket nodeData = zkc.getPacket(getPacketFrom,false,null); //TODO: Confirm what stat to pass???
                     String md5Key = nodeData.md5;
                     Job oldValue = completedIDMap.put(md5Key,toMap);
                     if (oldValue != null) {

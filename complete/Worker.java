@@ -88,7 +88,7 @@ class Worker {
         if (curPartitions != null){
             for (String partitionPath : curPartitions){
                 String jobPath = ZkConnector.activeJobPath + "/" + partitionPath; 
-                System.out.println("Trying to take for " + jobPath);
+                //System.out.println("Trying to take for " + jobPath);
                 Stat takenStat = zkc.exists(jobPath + ZkConnector.jobTakenTag, null);
                 if (takenStat == null){
                     //Awesome! Try to create the taken tag - be quick! We're racing other workers!
