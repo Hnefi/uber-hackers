@@ -212,11 +212,11 @@ public class ClientDriver {
         EventType type = event.getType();
         if (path.equalsIgnoreCase(ZkConnector.primaryJobTrackerPath)) {
             if (type == EventType.NodeDeleted) { // old primary dies
-                System.out.println("Old job tracker offline, reset parameters for new one.");
+                //System.out.println("Old job tracker offline, reset parameters for new one.");
                 setupJobTracker();
             }
             if (type == EventType.NodeCreated) {
-                System.out.println(ZkConnector.primaryJobTrackerPath + "created, this msg printed from handleEvent()");
+                //System.out.println(ZkConnector.primaryJobTrackerPath + "created, this msg printed from handleEvent()");
                 try {
                     Thread.sleep(2000);
                 } catch (Exception consumed) {}

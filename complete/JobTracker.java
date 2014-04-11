@@ -516,7 +516,7 @@ public class JobTracker {
                 } else { // increment number of outstanding partitions since it's not a new node
                     Job fromMap = activeIDMap.get(md5Key);
                     Job newJobToMap = new Job(fromMap.jobID,fromMap.remainingParts+1);  
-                    System.out.println("Incrementing outstanding count for key: " + md5Key + " to " + fromMap.remainingParts);
+                    System.out.println("Incrementing outstanding count for key: " + md5Key + " to " + newJobToMap.remainingParts);
                     activeIDMap.put(md5Key,newJobToMap);
                 }
                 /* Need to create a new PartitionThread for this node regardless.*/
