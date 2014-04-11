@@ -453,6 +453,7 @@ public class JobTracker {
         }
         Job fromMap = activeIDMap.get(key);
         fromMap.remainingParts -= 1;
+        //Job duplicated = new Job(fromMap.jobID,fromMap.remainingParts-1);
         if (toCmpNode.password != null) {
             String newCompletedJobPath = ZkConnector.completedJobPath + "/" + jobID.toString();
             Code ret = zkc.create(newCompletedJobPath,toCmpNode,CreateMode.PERSISTENT);
@@ -471,7 +472,7 @@ public class JobTracker {
                 System.out.println("New finished result created for job id: " + jobID.toString());
             }
         } else {
-            activeIDMap.put(key,fromMap);
+            activeIDMap.replace(key,fromMap);
         }
     }
 
@@ -514,7 +515,7 @@ public class JobTracker {
                     }
                 } else { // increment number of outstanding partitions since it's not a new node
                     Job fromMap = activeIDMap.get(md5Key);
-                    Job newJobToMap = new Job(fromMap.jobID,fromMap.remainingParts++);  
+                    Job newJobToMap = new Job(fromMap.jobID,fromMap.remainingParts+1);  
                     System.out.println("Incrementing outstanding count for key: " + md5Key + " to " + fromMap.remainingParts);
                     activeIDMap.put(md5Key,newJobToMap);
                 }
