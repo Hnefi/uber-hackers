@@ -444,6 +444,13 @@ public class JobTracker {
 
     public synchronized void registerPartitionCompleted(String key,Integer jobID,ZkPacket toCmpNode) {
         System.out.println("Registering one of the partitions completed for MD5: " + key + " job ID: " + jobID);
+        while (!activeIDMap.containsKey(key)){
+            try {
+                Thread.sleep(1000);
+            } catch (InterruptedException e){
+                Thread.currentThread().interrupt();
+            }
+        }
         Job fromMap = activeIDMap.get(key);
         fromMap.remainingParts -= 1;
         if (toCmpNode.password != null) {
