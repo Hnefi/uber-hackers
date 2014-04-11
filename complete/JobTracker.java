@@ -19,6 +19,7 @@ import java.net.UnknownHostException;
 
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.Random;
+import java.util.ArrayList;
 import java.util.List;
 
 import java.lang.Integer;
@@ -63,8 +64,16 @@ class PartitionThread implements Runnable
     Watcher partitionWatcher;
     JobTracker parentTracker;
 
-    public PartitionThread(ZkConnector z, ZkPacket p,Integer i,JobTracker jt) {
-        zkc = z;
+    public PartitionThread(String zkLocation,ZkPacket p,Integer i,JobTracker jt) {
+        zkc = new ZkConnector();
+        try {
+            zkc.connect(zkLocation);
+        } catch(InterruptedException consumed) {
+
+        } catch (IOException x) {
+            System.out.println("IOException: " + x.getMessage() + " in PartitionThread constructor.");
+        }
+
         packet = p;
         activeJobPath = ZkConnector.activeJobPath;
         completedPath = ZkConnector.completedJobPath;
@@ -72,6 +81,7 @@ class PartitionThread implements Runnable
         parentTracker = jt;
 
         thisNodePath = activeJobPath + "/" + jobID.toString() + ":" + Integer.toString(packet.partId);
+        System.out.println("Creating new partition thread with active path: " + thisNodePath);
         finishedNodePath = thisNodePath + ZkConnector.jobFinishedTag;
 
         partitionWatcher = new Watcher() { // Anonymous Watcher that only touches this partition.
@@ -97,6 +107,7 @@ class PartitionThread implements Runnable
             try {
                 Thread.sleep(10000); // don't overload this system with parallelism
             } catch (InterruptedException x) { 
+                System.out.println("Thread ID #: " + Thread.currentThread().getId() + " exiting.");
                 Thread.currentThread().interrupt(); // propagate to top level, thread killed.
             }
         }
@@ -106,6 +117,8 @@ class PartitionThread implements Runnable
         Stat stat = zkc.exists(finishedNodePath,partitionWatcher);
         if (stat != null) {
             finishedNodeExists();
+        } else {
+            System.out.println("Watch set");
         }
     }
 
@@ -134,6 +147,7 @@ class PartitionThread implements Runnable
 
         // this thread's work is done
         parentTracker.registerPartitionCompleted(md5Key,jobID,workerResults);
+        System.out.println("Thread ID #: " + Thread.currentThread().getId() + " exiting.");
         Thread.currentThread().interrupt();
     }
 
@@ -143,12 +157,15 @@ class PartitionThread implements Runnable
         String wokenPath = event.getPath();
         EventType wokenType = event.getType();
         if (wokenPath.equalsIgnoreCase(finishedNodePath)) { // watch triggered on right node.
-            if(wokenType == EventType.NodeCreated) {
+            /*if(wokenType == EventType.NodeCreated) {
                 System.out.println("Watcher detected finished node is completed.");
                 finishedNodeExists();
             } else {
                 checkForFinished();
-            }
+            }*/
+            checkForFinished();
+        } else {
+            System.out.println("Waking up on other path: " + wokenPath);
         }
     }
 }
@@ -161,15 +178,17 @@ class RequestHandler implements Runnable
     Socket sock = null;
     Integer currentID;
     ZkConnector zkc;
+    String zkLoc;
     JobTracker parentTracker;
     ConcurrentHashMap<String,Job> activeIDMap = null;
     ConcurrentHashMap<String,Job> completedIDMap = null;
 
-    public RequestHandler(Socket s,ZkConnector connector,Integer idx,JobTracker jt,
+    public RequestHandler(Socket s,ZkConnector connector,String x,Integer idx,JobTracker jt,
             ConcurrentHashMap<String,Job>aid,
             ConcurrentHashMap<String,Job>cid) {
         sock = s;
         zkc = connector;
+        zkLoc = x;
         currentID = idx;
         parentTracker = jt;
         activeIDMap = aid;
@@ -235,7 +254,7 @@ class RequestHandler implements Runnable
                 parentTracker.addActiveJobToMap(incomingMD5,currentID,1);
 
                 ZkPacket toPartition = new ZkPacket(incomingMD5,null,1,1,null,null,null);
-                Thread partThread = new Thread(new PartitionThread(zkc,toPartition,currentID,parentTracker),"PartitionThread1");
+                Thread partThread = new Thread(new PartitionThread(zkLoc,toPartition,currentID,parentTracker),"PartitionThread1");
                 partThread.start();
 
             } else { // get number of workers currently connected, make that many partitions
@@ -248,7 +267,7 @@ class RequestHandler implements Runnable
 
                 for (int i = 1;i<=numPartitions;i++) {
                     ZkPacket toPartition = new ZkPacket(incomingMD5,null,i,numPartitions,null,null,null);
-                    Thread iterThread = new Thread(new PartitionThread(zkc,toPartition,currentID,parentTracker),"PartitionThread"+i);
+                    Thread iterThread = new Thread(new PartitionThread(zkLoc,toPartition,currentID,parentTracker),"PartitionThread"+i);
                     iterThread.start();
                 }
 
@@ -311,6 +330,7 @@ public class JobTracker {
     /* Root zookeeper path for who is the primary jobtracker */
     ServerSocket listeningSock = null;
     ZkConnector zkc;
+    String zkLoc;
     Watcher watcher;
     boolean isPrimary = false;
     Integer serverPort = null;
@@ -335,6 +355,7 @@ public class JobTracker {
             return;
         } else {
             hosts = args[0];
+            zkLoc = hosts;
             serverPort = new Integer(args[1]);
         }
 
@@ -406,7 +427,7 @@ public class JobTracker {
             }
 
             Thread t = new Thread(
-                    new RequestHandler(recvSocket,zkc,currentID,this,activeIDMap,completedIDMap),"RequestHandlerThread");
+                    new RequestHandler(recvSocket,zkc,zkLoc,currentID,this,activeIDMap,completedIDMap),"RequestHandlerThread");
             t.start();
         }
     }
@@ -425,6 +446,13 @@ public class JobTracker {
         System.out.println("Registering one of the partitions completed for MD5: " + key + " job ID: " + jobID);
         Job fromMap = activeIDMap.get(key);
         fromMap.remainingParts -= 1;
+        if (toCmpNode.password != null) {
+            String newCompletedJobPath = ZkConnector.completedJobPath + "/" + jobID.toString();
+            Code ret = zkc.create(newCompletedJobPath,toCmpNode,CreateMode.PERSISTENT);
+            if (ret == Code.OK) {
+                System.out.println("New finished result created for job id: " + jobID.toString());
+            }
+        }
         if (fromMap.remainingParts == 0) {
             // remove from active map and put in completed map
             System.out.println("Deregistering this id in the active map since all of the partitions are reg'd completed.");
@@ -448,7 +476,7 @@ public class JobTracker {
     // and existing completed jobs.
     private void updateIDMaps() {
         List<String> activeChildren = zkc.getChildren(ZkConnector.activeJobPath,false);
-
+        List<Thread> threadsToStart = new ArrayList<Thread>();
         if (activeChildren != null) {
             for (String elem : activeChildren) {
                 // string process the node to get the id that was assigned
@@ -472,6 +500,7 @@ public class JobTracker {
                 String md5Key = nodeData.md5;
 
                 if (!activeIDMap.containsValue(toMap) ) { // this is a new job ID, need to add it in the map
+                    System.out.println("Adding new key: " + md5Key + " to activeIDMap.");
                     Job oldValue = activeIDMap.put(md5Key,toMap);
                     if (oldValue != null) {
                         System.err.println("Sanity check failed!!!!! MD5 " + md5Key + " previously mapped to jobID in ACTIVE!");
@@ -479,12 +508,14 @@ public class JobTracker {
                 } else { // increment number of outstanding partitions since it's not a new node
                     Job fromMap = activeIDMap.get(md5Key);
                     Job newJobToMap = new Job(fromMap.jobID,fromMap.remainingParts++);  
+                    System.out.println("Incrementing outstanding count for key: " + md5Key + " to " + fromMap.remainingParts);
                     activeIDMap.put(md5Key,newJobToMap);
                 }
                 /* Need to create a new PartitionThread for this node regardless.*/
-                Thread partThread = new Thread(new PartitionThread(zkc,nodeData,jobID,this),"PartitionThread1");
-                partThread.start();
+                Thread partThread = new Thread(new PartitionThread(zkLoc,nodeData,jobID,this),"PartitionThread");
+                threadsToStart.add(partThread);
             }
+
         }
 
         List<String> completedChildren = zkc.getChildren(ZkConnector.completedJobPath,false);
@@ -507,6 +538,11 @@ public class JobTracker {
                 }
             }
         }
+        for (Thread idx : threadsToStart) {
+            System.out.println("Starting Thread ID: " + idx.getId());
+            idx.start();
+        }
+
         System.out.println("Updated maps for ID's already in system.");
     }
 
