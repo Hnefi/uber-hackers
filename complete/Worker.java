@@ -67,7 +67,13 @@ class Worker {
             System.out.println("Zookeeper connect "+e.getMessage());
         }
         System.out.println("Connected to Zookeeper!");
-        
+
+        Code createCode = zkc.create(ZkConnector.workerPoolPath + ZkConnector.workerIDPath, (String)null, CreateMode.EPHEMERAL_SEQUENTIAL);
+        if (createCode != Code.OK){
+            System.err.println("ERROR: Could not create node "+ZkConnector.workerPoolPath + ZkConnector.workerIDPath);
+            System.exit(-1);
+        }
+ 
         while (!Thread.currentThread().isInterrupted()){
             while(curJob == null){
                 getJob();
